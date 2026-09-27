@@ -1,0 +1,121 @@
+:root {
+  /* ---- Sports at LUMS — red & black theme, applied globally ---- */
+  --bg: #0a0505;
+  --surface: #170f0e;
+  --surface-alt: #1f1513;
+  --border: #3a2320;
+  --border-strong: #52302b;
+
+  --text: #f3ece2;
+  --text-muted: #c9b8ab;
+  --text-faint: #8f7d72;
+
+  --accent: #b8102a;
+  --accent-dark: #7a0a1c;
+  --accent-bright: #e0203f;
+  --accent-glow: #ff3355;
+  --accent-light: rgba(184, 16, 42, 0.14);
+  --accent-border: rgba(184, 16, 42, 0.4);
+
+  --gold: #c9a24a;
+  --gold-bright: #e8c877;
+
+  --success: #3aa76d;
+  --warning: #d97706;
+  --warning-bg: #2b1c0c;
+  --warning-border: #6b4a1a;
+  --danger: #ff4d5e;
+
+  --gradient-primary: linear-gradient(135deg, var(--accent-glow) 0%, var(--accent) 48%, var(--accent-dark) 100%);
+  --gradient-hairline: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent-bright),
+    var(--accent-glow),
+    var(--accent-bright),
+    transparent
+  );
+
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 16px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.45), 0 4px 16px -6px rgba(184, 16, 42, 0.25);
+
+  --font-body: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Oswald', 'Arial Narrow', sans-serif;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* Prevents iOS Safari auto-zoom on focus of inputs under 16px */
+input,
+select {
+  font-size: max(13.5px, 16px);
+}
+
+@media (min-width: 640px) {
+  input,
+  select {
+    font-size: inherit;
+  }
+}
+
+a {
+  color: var(--accent-bright);
+}
+
+::selection {
+  background: var(--accent);
+  color: #fff;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
