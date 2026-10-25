@@ -42,7 +42,7 @@ export function minutesToLabel(absMinutes) {
   return `${hh}:${mm}`;
 }
 
-function subtractInterval(freeList, bs, be) {
+export function subtractInterval(freeList, bs, be) {
   const result = [];
   for (const iv of freeList) {
     if (be <= iv.start || bs >= iv.end) {

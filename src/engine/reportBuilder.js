@@ -3,34 +3,49 @@
 // row objects used by the schedule table, the exports, and the analytics
 // dashboard.
 
-function roundLabel(matchCount, roundIdx) {
-  if (matchCount === 1) return 'Final';
-  if (matchCount === 2) return 'Semifinal';
-  if (matchCount === 4) return 'Quarterfinal';
+import { lockedResultIds } from './tournament.js';
+
+function roundLabel(round, roundIdx) {
+  if (round.some((m) => m.group)) return `Group Round ${roundIdx + 1}`;
+  const n = round.length;
+  if (n === 1) return 'Final';
+  if (n === 2) return 'Semifinal';
+  if (n === 4) return 'Quarterfinal';
   return `Round ${roundIdx + 1}`;
 }
 
 export function buildScheduleRows(matchesBySport, scheduled, unscheduledIds) {
+  // First pass: match numbers, so a projected slot can read
+  // "Winner of Match 3" using the number people actually see.
+  const numberById = new Map();
+  let n = 0;
+  for (const rounds of Object.values(matchesBySport)) {
+    for (const round of rounds) for (const m of round) numberById.set(m.id, ++n);
+  }
+  const locked = lockedResultIds(matchesBySport);
+  const display = (e) =>
+    e?.isPlaceholder && e.sourceMatchId ? `Winner of Match ${numberById.get(e.sourceMatchId) ?? e.sourceMatchId}` : e?.name ?? '';
+
   const rows = [];
-  let matchNumber = 0;
   for (const [sport, rounds] of Object.entries(matchesBySport)) {
     rounds.forEach((round, roundIdx) => {
-      const label = roundLabel(round.length, roundIdx);
+      const label = roundLabel(round, roundIdx);
       for (const m of round) {
-        matchNumber += 1;
         const slot = scheduled.get(m.id);
         const isUnscheduled = unscheduledIds.includes(m.id);
         rows.push({
           matchId: m.id,
-          matchNumber,
+          matchNumber: numberById.get(m.id),
           sport,
           round: label,
-          teamA: m.entrantA.name,
+          teamA: display(m.entrantA),
           entrantAId: m.entrantA.id,
-          delegationA: m.entrantA.delegation,
-          teamB: m.entrantB.name,
+          delegationA: m.entrantA.delegation || '',
+          teamB: display(m.entrantB),
           entrantBId: m.entrantB.id,
-          delegationB: m.entrantB.delegation,
+          delegationB: m.entrantB.delegation || '',
+          placeholderA: !!m.entrantA.isPlaceholder,
+          placeholderB: !!m.entrantB.isPlaceholder,
           group: m.group || null,
           venue: slot?.venueName ?? (isUnscheduled ? 'Unscheduled' : ''),
           date: slot?.day ?? (isUnscheduled ? '—' : ''),
@@ -39,8 +54,9 @@ export function buildScheduleRows(matchesBySport, scheduled, unscheduledIds) {
           clash: m.clash || '',
           unscheduled: isUnscheduled,
           isWalkover: !!m.isWalkover,
+          isProjected: !!m.isProjected,
           winnerId: m.winnerId || null,
-          advanced: !!m.advanced,
+          advanced: locked.has(m.id),
         });
       }
     });

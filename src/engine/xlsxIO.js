@@ -25,8 +25,10 @@ function buildHeaderMap(row) {
 }
 
 function findValue(row, headerMap, aliases) {
+  // First alias with a non-empty value wins, so one sheet can mix "Team
+  // Name" rows and "Participant Name" rows.
   for (const alias of aliases) {
-    if (headerMap[alias] != null) return row[headerMap[alias]];
+    if (headerMap[alias] != null && String(row[headerMap[alias]]).trim() !== '') return row[headerMap[alias]];
   }
   return '';
 }

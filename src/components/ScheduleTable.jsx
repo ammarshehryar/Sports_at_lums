@@ -100,9 +100,16 @@ function ResultPicker({ row, onSetResult }) {
   if (row.isWalkover) {
     return <span className="result-pill result-pill-bye">Bye</span>;
   }
+  if (row.placeholderA || row.placeholderB) {
+    return <span className="result-pill result-pill-bye">Awaiting</span>;
+  }
   if (row.advanced) {
     const winnerName = row.winnerId === row.entrantAId ? row.teamA : row.teamB;
-    return <span className="result-pill result-pill-locked">✓ {winnerName}</span>;
+    return (
+      <span className="result-pill result-pill-locked" title="Locked: a later round already has a result">
+        ✓ {winnerName}
+      </span>
+    );
   }
   const isA = row.winnerId === row.entrantAId;
   const isB = row.winnerId === row.entrantBId;
@@ -314,6 +321,7 @@ export default function ScheduleTable({
               const rowClass = [
                 r.unscheduled ? 'row-warning' : '',
                 r.isWalkover ? 'row-walkover' : '',
+                r.placeholderA || r.placeholderB ? 'row-projected' : '',
                 conflicted ? 'row-conflict' : '',
               ]
                 .filter(Boolean)
@@ -352,16 +360,17 @@ export default function ScheduleTable({
                     <tr className={rowClass}>
                     <td>{r.matchNumber}</td>
                     <td>{r.sport}</td>
-                    <td>{r.round || '—'}</td>
                     <td>
-                      <EditableCell value={r.group || ''} placeholder="—" onCommit={edit('group')} locked={locked} />
+                      {r.round || '—'}
+                      {(r.placeholderA || r.placeholderB) && <span className="projected-tag">Projected</span>}
                     </td>
+                    <td>{r.group ? `Group ${r.group}` : '—'}</td>
                     <td>
                       <EditableCell
                         value={r.teamA}
                         datalistId="schedule-name-options"
                         onCommit={edit('teamA')}
-                        locked={locked}
+                        locked={locked || r.placeholderA}
                       />
                     </td>
                     <td>
@@ -369,7 +378,7 @@ export default function ScheduleTable({
                         value={r.delegationA}
                         datalistId="schedule-delegation-options"
                         onCommit={edit('delegationA')}
-                        locked={locked}
+                        locked={locked || r.placeholderA}
                       />
                     </td>
                     <td>
@@ -377,7 +386,7 @@ export default function ScheduleTable({
                         value={r.teamB}
                         datalistId="schedule-name-options"
                         onCommit={edit('teamB')}
-                        locked={locked}
+                        locked={locked || r.placeholderB}
                       />
                     </td>
                     <td>
@@ -385,7 +394,7 @@ export default function ScheduleTable({
                         value={r.delegationB}
                         datalistId="schedule-delegation-options"
                         onCommit={edit('delegationB')}
-                        locked={locked}
+                        locked={locked || r.placeholderB}
                       />
                     </td>
                     <td title={conflicted ? 'Double-booked with another match — check venue/time.' : undefined}>

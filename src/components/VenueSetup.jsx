@@ -71,9 +71,26 @@ export default function VenueSetup({ sports, venues, onChange }) {
     const { venueId, dayId } = picker;
 
     if (dayId) {
-      // Editing one existing row's date.
-      const newDate = dates[0];
-      if (newDate) updateDay(venueId, dayId, { day: newDate });
+      // Editing one existing row's date(s). The first picked date replaces
+      // this row's date; any additional dates picked at the same time
+      // become new rows (same open/close/break settings as this row),
+      // so multiple days can be added from here too, not just the top
+      // "+ Add day(s)" button.
+      if (dates.length) {
+        onChange(
+          venues.map((v) => {
+            if (v.id !== venueId) return v;
+            const current = v.days.find((d) => d.id === dayId);
+            const [firstDate, ...restDates] = dates;
+            const existing = new Set(v.days.map((d) => d.day).filter(Boolean));
+            existing.delete(current?.day);
+            const extraDates = restDates.filter((d) => !existing.has(d));
+            const extraRows = extraDates.map((d) => ({ ...emptyDay(), ...current, id: emptyDay().id, day: d }));
+            const updatedDays = v.days.map((d) => (d.id === dayId ? { ...d, day: firstDate } : d));
+            return { ...v, days: [...updatedDays, ...extraRows] };
+          })
+        );
+      }
     } else {
       // Bulk "+ Add day(s)": add one row per newly-picked date (skipping
       // any already on this venue), dropping the venue's unset placeholder
@@ -222,7 +239,7 @@ export default function VenueSetup({ sports, venues, onChange }) {
 
               {picker?.venueId === v.id && picker?.dayId === d.id && (
                 <MultiDatePicker
-                  mode="single"
+                  mode="multi"
                   initialDates={d.day ? [d.day] : []}
                   onDone={handlePickerDone}
                   onCancel={closePicker}

@@ -44,6 +44,34 @@ ready-made example file.
   distribution, venue utilization, a tournament timeline, and overall stat
   cards
 
+## Saved fixtures (database)
+
+After the landing page the portal asks which fixture you're making and your
+name, then saves every change automatically (roster, venues, settings,
+schedule, results, group edits). Saved fixtures are listed there to reopen.
+
+Storage is Supabase (free tier) when `src/storage/config.js` has a project
+URL and anon key; run `supabase/setup.sql` once in the Supabase SQL editor
+to create the table. With the config blank it falls back to the browser's
+localStorage.
+
+## Two-round model
+
+Knockout sports are always generated as Round 1 plus a projected Round 2
+("Winner of Match 1 vs Winner of Match 2") that already has a venue, date
+and time. Projected slots fill in when results are recorded, and the round
+after is drawn and booked automatically once a round's feeder results are
+in. Group stage sports get their knockout round booked after the group
+games the same way.
+
+## Editable groups
+
+In group stage, each team in the Groups panel can be moved, swapped with a
+team in another group, removed, or added back. The sport's round robin is
+rebuilt immediately: unchanged pairings keep their slot, dropped pairings
+are deleted, and new pairings reuse freed slots or get booked into open
+venue time (`engine/tournament.js`).
+
 ## Scheduling logic
 
 The scheduling engine is a constraint-based system in two independent stages:

@@ -52,6 +52,10 @@ export function generateSport(sportId, entrants, options = {}) {
 
   const rounds = [];
   const groupWinners = [];
+  const groupList = groups.map((group, gi) => ({
+    label: GROUP_LABELS[gi] || `G${gi + 1}`,
+    memberIds: group.map((e) => e.id),
+  }));
   groups.forEach((group, gi) => {
     if (group.length < 2) {
       if (group.length === 1) groupWinners.push(group[0]);
@@ -86,7 +90,10 @@ export function generateSport(sportId, entrants, options = {}) {
         entrantA: a,
         entrantB: b,
         clash: null,
-        isPending: true,
+        // Projected, not pending: the opponents aren't known until the
+        // group stage is played, but the fixture still gets a real venue
+        // and time slot after the group stage (the two-round model).
+        isProjected: true,
         stage: 'knockout',
       });
     }
@@ -98,6 +105,7 @@ export function generateSport(sportId, entrants, options = {}) {
     byes: [],
     meta: {
       format: 'groupStageKnockout',
+      groups: groupList,
       totalEntrants: entrants.length,
       numGroups: groups.length,
       unresolvedGroupClashes: clashes.filter((c) => !c.resolved).length,

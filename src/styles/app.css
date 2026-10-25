@@ -1484,3 +1484,245 @@
   padding-top: 12px;
   margin-top: 4px;
 }
+
+/* ---------- Fixture picker (new / reopen a saved fixture) ---------- */
+
+.picker-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.picker-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.picker-main {
+  flex: 1;
+  width: 100%;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 28px 20px 60px;
+  display: grid;
+  grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.picker-card {
+  padding: 20px;
+}
+
+.picker-title {
+  margin: 0 0 14px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.picker-form .field input {
+  width: 100%;
+}
+
+.picker-form .btn-generate {
+  margin-top: 6px;
+}
+
+.picker-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.picker-list-head .picker-title {
+  margin-bottom: 10px;
+}
+
+.picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+}
+
+.picker-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 12px 14px;
+  cursor: pointer;
+}
+
+.picker-open:hover .picker-item-name {
+  color: var(--gold-bright);
+}
+
+.picker-item-name {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.picker-item-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 760px) {
+  .picker-main {
+    grid-template-columns: 1fr;
+    padding: 18px 16px 40px;
+  }
+  .picker-header {
+    padding: 12px 16px;
+  }
+}
+
+/* ---------- Save status ---------- */
+
+.save-pill {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.save-pill-saved,
+.save-pill-ok {
+  color: var(--success);
+  border-color: rgba(58, 167, 109, 0.4);
+}
+
+.save-pill-local {
+  color: var(--gold-bright);
+  border-color: rgba(201, 162, 74, 0.45);
+}
+
+.save-pill-error {
+  color: var(--danger);
+  border-color: rgba(255, 77, 94, 0.5);
+}
+
+/* ---------- Projected (hypothetical) fixtures ---------- */
+
+.row-projected td {
+  color: var(--text-muted);
+}
+
+.projected-tag {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--gold-bright);
+  border: 1px solid rgba(201, 162, 74, 0.45);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
+/* ---------- Editable groups ---------- */
+
+.groups-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.groups-head .groups-title {
+  margin-bottom: 0;
+}
+
+.groups-hint {
+  margin: 0;
+}
+
+.groups-last-edit {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  color: var(--success);
+}
+
+.group-member-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.group-member-list li {
+  align-items: center;
+}
+
+.group-member-action {
+  flex-shrink: 0;
+  max-width: 96px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  padding: 3px 4px;
+  cursor: pointer;
+}
+
+.group-member-action:hover {
+  border-color: var(--accent-border);
+  color: var(--text);
+}
+
+.group-unassigned {
+  margin-top: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  max-width: 360px;
+}
+
+.group-unassigned-title {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
