@@ -32,6 +32,10 @@ async function call(url, opts) {
 
 const cloud = {
   list: () => call(`${base()}?select=id,name,created_by,created_at,updated_at&order=updated_at.desc`, { headers: headers() }),
+  async getRev(id) {
+    const rows = await call(`${base()}?id=eq.${encodeURIComponent(id)}&select=rev`, { headers: headers() });
+    return rows?.[0]?.rev ?? null;
+  },
   async load(id) {
     const rows = await call(`${base()}?id=eq.${encodeURIComponent(id)}&select=*`, { headers: headers() });
     return rows?.[0] || null;
@@ -44,12 +48,15 @@ const cloud = {
     });
     return rows[0];
   },
-  save: (id, state) =>
-    call(`${base()}?id=eq.${encodeURIComponent(id)}`, {
+  // Only succeeds if nobody else saved since `rev`; otherwise {conflict}.
+  async save(id, state, rev) {
+    const rows = await call(`${base()}?id=eq.${encodeURIComponent(id)}&rev=eq.${Number(rev) || 0}`, {
       method: 'PATCH',
-      headers: headers({ Prefer: 'return=minimal' }),
-      body: JSON.stringify({ state, updated_at: new Date().toISOString() }),
-    }),
+      headers: headers({ Prefer: 'return=representation' }),
+      body: JSON.stringify({ state, rev: (Number(rev) || 0) + 1, updated_at: new Date().toISOString() }),
+    });
+    return rows?.length ? { ok: true, rev: rows[0].rev } : { ok: false, conflict: true };
+  },
   remove: (id) => call(`${base()}?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE', headers: headers() }),
 };
 
@@ -84,17 +91,23 @@ const local = {
   },
   async create(name, createdBy) {
     const now = new Date().toISOString();
-    const rec = { id: uid(), name, created_by: createdBy, state: {}, created_at: now, updated_at: now };
+    const rec = { id: uid(), name, created_by: createdBy, state: {}, rev: 0, created_at: now, updated_at: now };
     const all = readAll();
     all[rec.id] = rec;
     writeAll(all);
     return rec;
   },
-  async save(id, state) {
+  async getRev(id) {
+    return readAll()[id]?.rev ?? 0;
+  },
+  async save(id, state, rev) {
     const all = readAll();
-    if (!all[id]) return;
-    all[id] = { ...all[id], state, updated_at: new Date().toISOString() };
+    if (!all[id]) return { ok: false, conflict: false };
+    const cur = all[id].rev ?? 0;
+    if (cur !== (Number(rev) || 0)) return { ok: false, conflict: true };
+    all[id] = { ...all[id], state, rev: cur + 1, updated_at: new Date().toISOString() };
     writeAll(all);
+    return { ok: true, rev: cur + 1 };
   },
   async remove(id) {
     const all = readAll();
@@ -108,5 +121,6 @@ const store = usingCloud ? cloud : local;
 export const listFixtures = () => store.list();
 export const loadFixture = (id) => store.load(id);
 export const createFixture = (name, createdBy) => store.create(name, createdBy);
-export const saveFixture = (id, state) => store.save(id, state);
+export const saveFixture = (id, state, rev) => store.save(id, state, rev);
+export const getFixtureRev = (id) => store.getRev(id);
 export const deleteFixture = (id) => store.remove(id);

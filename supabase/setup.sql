@@ -4,6 +4,7 @@ create table if not exists public.fixtures (
   name text not null,
   created_by text not null,
   state jsonb not null default '{}'::jsonb,
+  rev bigint not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

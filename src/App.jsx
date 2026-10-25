@@ -20,11 +20,14 @@ import {
   bracketStatus,
   serializeTournament,
   deserializeTournament,
+  autoAdvance,
 } from './engine/tournament.js';
-import { loadFixture, saveFixture } from './storage/fixtureStore.js';
+import { loadFixture, saveFixture, getFixtureRev } from './storage/fixtureStore.js';
+import { mergeStates } from './storage/merge.js';
 import './styles/app.css';
 
 const SAVE_DELAY_MS = 800;
+const POLL_MS = 4000;
 
 export default function App() {
   const [unlocked, setUnlocked] = useState(isUnlocked);
@@ -59,7 +62,6 @@ export default function App() {
   const [genError, setGenError] = useState('');
   const [groupEditNote, setGroupEditNote] = useState('');
 
-  const skipNextSave = useRef(false);
   const touch = useCallback(() => setVersion((v) => v + 1), []);
 
   const flatVenueRows = useMemo(() => flattenVenues(venues), [venues]);
@@ -68,7 +70,39 @@ export default function App() {
     [flatVenueRows, matchDuration, breakDuration]
   );
 
-  // ---------- open / save ----------
+  // ---------- open / save / live sync ----------
+  //
+  // synced = what this screen and the database last agreed on: its version
+  // number (rev), the saved state (the base for merging) and that state as
+  // JSON (to tell whether there are unsaved local edits).
+  const synced = useRef({ rev: 0, state: null, json: '' });
+  const rebaseNext = useRef(false); // after loading a state, adopt it as "saved" without writing
+  const saving = useRef(false);
+  const [remoteNote, setRemoteNote] = useState('');
+
+  const currentState = useMemo(
+    () =>
+      loaded
+        ? {
+            version: 1,
+            fileName,
+            entrants,
+            venues,
+            matchDuration,
+            breakDuration,
+            stageFormat,
+            groupSizeMode,
+            numGroups,
+            groupSize,
+            genSummary,
+            tournament: serializeTournament(genResult, entrants),
+          }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [loaded, fileName, entrants, venues, matchDuration, breakDuration, stageFormat, groupSizeMode, numGroups, groupSize, genSummary, genResult, version]
+  );
+  const currentRef = useRef(null);
+  currentRef.current = currentState;
 
   const resetDashboard = () => {
     setFileName('');
@@ -85,75 +119,157 @@ export default function App() {
     setGenSummary(null);
     setGenError('');
     setGroupEditNote('');
+    setRemoteNote('');
   };
 
-  const openFixture = useCallback(async (id) => {
-    setLoaded(false);
-    setSaveStatus('idle');
-    setSaveError('');
-    resetDashboard();
-    setScreen('dashboard');
-    try {
-      const rec = await loadFixture(id);
-      if (!rec) throw new Error('That fixture could not be found.');
-      setFixture({ id: rec.id, name: rec.name, created_by: rec.created_by });
-      const s = rec.state || {};
+  // Put a saved state on screen (on open, or when someone else's changes come in).
+  const applyState = useCallback(
+    (s = {}) => {
       const ents = s.entrants || [];
       setFileName(s.fileName || '');
       setEntrants(ents);
       setVenues(s.venues || []);
-      if (s.matchDuration) setMatchDuration(s.matchDuration);
-      if (s.breakDuration != null) setBreakDuration(s.breakDuration);
-      if (s.stageFormat) setStageFormat(s.stageFormat);
-      if (s.groupSizeMode) setGroupSizeMode(s.groupSizeMode);
-      if (s.numGroups) setNumGroups(s.numGroups);
-      if (s.groupSize) setGroupSize(s.groupSize);
-      setGenResult(deserializeTournament(s.tournament, ents));
+      setMatchDuration(s.matchDuration || 30);
+      setBreakDuration(s.breakDuration ?? 10);
+      setStageFormat(s.stageFormat || 'knockout');
+      setGroupSizeMode(s.groupSizeMode || 'numGroups');
+      setNumGroups(s.numGroups || 4);
+      setGroupSize(s.groupSize || 4);
+      const t = deserializeTournament(s.tournament, ents);
+      // If merging finished a round (two people each recorded its last
+      // results), draw the next round now. That's a real change, so let it save.
+      let advanced = 0;
+      if (t) {
+        advanced = autoAdvance(t, {
+          flatVenueRows: flattenVenues(s.venues || []),
+          settings: { durationMinutes: s.matchDuration || 30, bufferMinutes: s.breakDuration ?? 10 },
+        }).length;
+      }
+      setGenResult(t);
       setGenSummary(s.genSummary || null);
-      skipNextSave.current = true; // just loaded: nothing new to write back
-      setLoaded(true);
+      rebaseNext.current = advanced === 0;
+      touch();
+    },
+    [touch]
+  );
+
+  const openFixture = useCallback(
+    async (id) => {
+      setLoaded(false);
+      setSaveStatus('idle');
+      setSaveError('');
+      resetDashboard();
+      setScreen('dashboard');
+      try {
+        const rec = await loadFixture(id);
+        if (!rec) throw new Error('That fixture could not be found.');
+        setFixture({ id: rec.id, name: rec.name, created_by: rec.created_by });
+        synced.current = { rev: rec.rev ?? 0, state: rec.state || {}, json: '' };
+        applyState(rec.state || {});
+        setLoaded(true);
+      } catch (e) {
+        setSaveStatus('error');
+        setSaveError(e.message);
+        setScreen('picker');
+      }
+    },
+    [applyState]
+  );
+
+  // Save local edits. If someone else saved first, fetch theirs, merge both
+  // sets of changes, save the merge, and show it.
+  const flush = useCallback(async () => {
+    if (!fixture || saving.current) return;
+    let local = currentRef.current;
+    if (!local || JSON.stringify(local) === synced.current.json) {
+      setSaveStatus('saved');
+      return;
+    }
+    saving.current = true;
+    setSaveStatus('saving');
+    let merged = false;
+    try {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const res = await saveFixture(fixture.id, local, synced.current.rev);
+        if (res.ok) {
+          const json = JSON.stringify(local);
+          synced.current = { rev: res.rev, state: local, json };
+          if (merged) {
+            applyState(local);
+            setRemoteNote("Merged with someone else's changes");
+          }
+          setSaveStatus('saved');
+          setSaveError('');
+          break;
+        }
+        if (!res.conflict) throw new Error('This fixture no longer exists.');
+        const rec = await loadFixture(fixture.id);
+        if (!rec) throw new Error('This fixture was deleted by someone else.');
+        local = mergeStates(synced.current.state, local, rec.state || {});
+        merged = true;
+        synced.current = { rev: rec.rev ?? 0, state: rec.state || {}, json: JSON.stringify(rec.state || {}) };
+        if (attempt === 3) throw new Error('Too many people saving at once. Your change will retry.');
+      }
     } catch (e) {
       setSaveStatus('error');
       setSaveError(e.message);
-      setScreen('picker');
+    } finally {
+      saving.current = false;
     }
-  }, []);
+  }, [fixture, applyState]);
 
+  // Autosave shortly after any change.
   useEffect(() => {
-    if (!loaded || !fixture) return undefined;
-    if (skipNextSave.current) {
-      skipNextSave.current = false;
+    if (!loaded || !fixture || !currentState) return undefined;
+    const json = JSON.stringify(currentState);
+    if (rebaseNext.current) {
+      rebaseNext.current = false;
+      synced.current = { ...synced.current, json };
       setSaveStatus('saved');
       return undefined;
     }
+    if (json === synced.current.json) return undefined;
     setSaveStatus('saving');
-    const t = setTimeout(() => {
-      const state = {
-        version: 1,
-        fileName,
-        entrants,
-        venues,
-        matchDuration,
-        breakDuration,
-        stageFormat,
-        groupSizeMode,
-        numGroups,
-        groupSize,
-        genSummary,
-        tournament: serializeTournament(genResult, entrants),
-      };
-      saveFixture(fixture.id, state)
-        .then(() => {
-          setSaveStatus('saved');
-          setSaveError('');
-        })
-        .catch((e) => {
-          setSaveStatus('error');
-          setSaveError(e.message);
-        });
-    }, SAVE_DELAY_MS);
+    const t = setTimeout(flush, SAVE_DELAY_MS);
     return () => clearTimeout(t);
-  }, [loaded, fixture, fileName, entrants, venues, matchDuration, breakDuration, stageFormat, groupSizeMode, numGroups, groupSize, genSummary, genResult, version]);
+  }, [loaded, fixture, currentState, flush]);
+
+  // Live refresh: every few seconds, pull in changes others have saved, and
+  // retry a save that failed (e.g. after the internet dropped).
+  useEffect(() => {
+    if (!loaded || !fixture) return undefined;
+    let stopped = false;
+    const tick = async () => {
+      if (stopped || saving.current) return;
+      const dirty = JSON.stringify(currentRef.current) !== synced.current.json;
+      try {
+        if (dirty) {
+          await flush();
+          return;
+        }
+        const rev = await getFixtureRev(fixture.id);
+        if (stopped || rev == null || rev <= synced.current.rev || saving.current) return;
+        const rec = await loadFixture(fixture.id);
+        if (stopped || !rec || JSON.stringify(currentRef.current) !== synced.current.json) return;
+        synced.current = { rev: rec.rev ?? 0, state: rec.state || {}, json: '' };
+        applyState(rec.state || {});
+        setRemoteNote('Updated with changes from someone else');
+      } catch {
+        /* offline for a moment: try again next tick */
+      }
+    };
+    const iv = setInterval(tick, POLL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(iv);
+    };
+  }, [loaded, fixture, flush, applyState]);
+
+  useEffect(() => {
+    if (!remoteNote) return undefined;
+    const t = setTimeout(() => setRemoteNote(''), 4000);
+    return () => clearTimeout(t);
+  }, [remoteNote]);
 
   // ---------- derived ----------
 
@@ -307,6 +423,7 @@ export default function App() {
         fixture={fixture}
         saveStatus={loaded ? saveStatus : 'loading'}
         saveError={saveError}
+        remoteNote={remoteNote}
       />
       <div className="app-body">
         <LeftPanel

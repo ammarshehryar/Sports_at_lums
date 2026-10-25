@@ -275,7 +275,8 @@ export function generateTournament({ entrants, stageFormat, formatOptions, flatV
     unscheduled.push(...res.unscheduled);
   }
 
-  const state = { matchesBySport, scheduled, unscheduled, groupsBySport };
+  const genId = `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const state = { genId, matchesBySport, scheduled, unscheduled, groupsBySport };
   // A first round that is all walkovers (tiny pools) resolves itself.
   autoAdvance(state, { flatVenueRows, settings });
   return state;
@@ -410,6 +411,7 @@ export function serializeTournament(state, entrants) {
     );
   }
   return {
+    genId: state.genId || null,
     matchesBySport,
     scheduled: [...state.scheduled.entries()],
     unscheduled: [...state.unscheduled],
@@ -429,6 +431,7 @@ export function deserializeTournament(saved, entrants) {
   }
   syncProjected(matchesBySport);
   return {
+    genId: saved.genId || null,
     matchesBySport,
     scheduled: new Map(saved.scheduled || []),
     unscheduled: saved.unscheduled || [],

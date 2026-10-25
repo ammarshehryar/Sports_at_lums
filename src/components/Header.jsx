@@ -5,11 +5,11 @@ const SAVE_LABEL = {
   loading: 'Opening…',
   idle: '',
   saving: 'Saving…',
-  saved: usingCloud ? 'All changes saved' : 'Saved in this browser',
+  saved: usingCloud ? 'All changes saved · live' : 'Saved in this browser',
   error: 'Not saved',
 };
 
-export default function Header({ summary, onBack, fixture, saveStatus, saveError }) {
+export default function Header({ summary, onBack, fixture, saveStatus, saveError, remoteNote }) {
   return (
     <header className="app-header">
       <div className="app-header-left">
@@ -28,6 +28,7 @@ export default function Header({ summary, onBack, fixture, saveStatus, saveError
                 {SAVE_LABEL[saveStatus]}
               </span>
             )}
+            {remoteNote && <span className="save-pill save-pill-local">{remoteNote}</span>}
           </p>
         </div>
       </div>
