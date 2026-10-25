@@ -15,3 +15,7 @@ alter table public.fixtures enable row level security;
 drop policy if exists "portal access" on public.fixtures;
 create policy "portal access" on public.fixtures
   for all to anon, authenticated using (true) with check (true);
+
+-- Let the portal's public (anon) key reach the table through the Data API.
+grant usage on schema public to anon, authenticated;
+grant select, insert, update, delete on public.fixtures to anon, authenticated;
