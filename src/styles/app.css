@@ -1726,3 +1726,54 @@
   color: var(--text-muted);
   margin-bottom: 8px;
 }
+
+/* Group team names: plain editable text */
+.group-member-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.group-name-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  padding: 4px 6px;
+}
+
+.group-name-input:hover {
+  border-color: var(--border-strong);
+}
+
+.group-name-input:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  background: var(--surface);
+}
+
+.group-add-row .group-name-input {
+  border: 1px dashed var(--border-strong);
+  color: var(--text-muted);
+}
+
+.group-remove {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.group-remove:hover {
+  background: var(--accent-light);
+  color: var(--danger);
+}

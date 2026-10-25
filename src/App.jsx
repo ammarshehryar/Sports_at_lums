@@ -328,14 +328,83 @@ export default function App() {
     [genResult, ctx, touch]
   );
 
-  const handleGroupEdit = useCallback(
-    (sport, groups, unassigned) => {
-      if (!genResult) return;
-      const { removed, added } = applyGroupEdit(genResult, sport, groups, unassigned, entrants, ctx);
-      const parts = [];
+  // One group change from the Groups panel: rename / add / remove a team.
+  const handleGroupChange = useCallback(
+    (sport, op) => {
+      if (!genResult?.groupsBySport?.[sport]) return;
+      const norm = (x) => String(x || '').trim().toLowerCase();
+      const cur = genResult.groupsBySport[sport];
+      const groups = cur.groups.map((g) => ({ ...g, memberIds: [...g.memberIds] }));
+      let unassigned = [...(cur.unassigned || [])];
+      let roster = entrants;
+      const groupOf = (id) => groups.find((g) => g.memberIds.includes(id));
+      const takeOut = (id) => {
+        const g = groupOf(id);
+        if (g) g.memberIds = g.memberIds.filter((x) => x !== id);
+        unassigned = unassigned.filter((x) => x !== id);
+      };
+      const findByName = (name, exceptId) =>
+        entrants.find((e) => e.sport === sport && e.id !== exceptId && norm(e.name) === norm(name));
+      let note = '';
+
+      if (op.type === 'rename') {
+        const me = entrants.find((e) => e.id === op.id);
+        const other = findByName(op.name, op.id);
+        if (!me) return;
+        if (!other) {
+          // Plain rename: same team, same fixtures, new name everywhere.
+          me.name = op.name.trim();
+          setGroupEditNote(`${sport}: renamed to ${me.name}.`);
+          touch();
+          return;
+        }
+        // Typed another existing team's name: put that team here instead.
+        const mine = groupOf(me.id);
+        const theirs = groupOf(other.id);
+        if (theirs && mine && theirs !== mine) {
+          mine.memberIds = mine.memberIds.map((x) => (x === me.id ? other.id : x));
+          theirs.memberIds = theirs.memberIds.map((x) => (x === other.id ? me.id : x));
+          note = `swapped ${me.name} and ${other.name}`;
+        } else if (theirs === mine) {
+          return; // both already in this group
+        } else {
+          mine.memberIds = mine.memberIds.map((x) => (x === me.id ? other.id : x));
+          unassigned = unassigned.filter((x) => x !== other.id).concat(me.id);
+          note = `replaced ${me.name} with ${other.name}`;
+        }
+      } else if (op.type === 'add') {
+        const target = groups.find((g) => g.label === op.label);
+        if (!target) return;
+        let team = findByName(op.name);
+        if (team && target.memberIds.includes(team.id)) return;
+        if (team) {
+          const from = groupOf(team.id);
+          takeOut(team.id);
+          note = from ? `moved ${team.name} to Group ${op.label}` : `added ${team.name} to Group ${op.label}`;
+        } else {
+          team = {
+            id: `N${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+            name: op.name.trim(),
+            delegation: '',
+            sport,
+          };
+          roster = [...entrants, team];
+          note = `added ${team.name} to Group ${op.label}`;
+        }
+        target.memberIds.push(team.id);
+      } else if (op.type === 'remove') {
+        const me = entrants.find((e) => e.id === op.id);
+        takeOut(op.id);
+        unassigned.push(op.id);
+        note = `removed ${me?.name || 'team'}`;
+      }
+
+      const { removed, added } = applyGroupEdit(genResult, sport, groups, unassigned, roster, ctx);
+      if (roster !== entrants) setEntrants(roster);
+      const parts = [note];
       if (removed) parts.push(`${removed} fixture${removed === 1 ? '' : 's'} removed`);
       if (added) parts.push(`${added} fixture${added === 1 ? '' : 's'} added`);
-      setGroupEditNote(`${sport}: ${parts.length ? parts.join(', ') : 'no fixture changes'}.`);
+      setGroupEditNote(`${sport}: ${parts.join(', ')}.`);
       touch();
     },
     [genResult, entrants, ctx, touch]
@@ -418,7 +487,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <Header
-        summary={genSummary && { ...genSummary, matchCount: scheduleRows.length }}
+        summary={genSummary && { ...genSummary, entrantCount: entrants.length, matchCount: scheduleRows.length }}
         onBack={() => setScreen('picker')}
         fixture={fixture}
         saveStatus={loaded ? saveStatus : 'loading'}
@@ -504,7 +573,7 @@ export default function App() {
               <GroupsOverview
                 groupsBySport={genResult?.groupsBySport}
                 entrants={entrants}
-                onEdit={handleGroupEdit}
+                onChange={handleGroupChange}
                 lastEdit={groupEditNote}
               />
               <AnalyticsDashboard

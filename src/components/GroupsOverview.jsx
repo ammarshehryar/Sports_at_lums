@@ -1,147 +1,123 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 /**
- * Editable group-stage groups. Every team has one dropdown to move it to
- * another group, swap it with a team in another group, or take it out of
- * the groups altogether (it then waits under "Not in a group" and can be
- * added back). Each change goes straight to onEdit, which rebuilds that
- * sport's fixtures (engine/tournament.js applyGroupEdit), so the schedule
- * above always matches what's shown here.
+ * Editable group-stage groups. Each team is a plain text field:
+ *  - type over a name to rename that team (fixtures stay, the name changes
+ *    everywhere); typing the name of a team from another group swaps the two
+ *  - × removes the team from its group (its fixtures are deleted)
+ *  - "Add team" puts a team in the group (an existing one by name, or a new
+ *    one) and creates its fixtures
+ * Each change goes to onChange, which rebuilds that sport's fixtures.
  */
-export default function GroupsOverview({ groupsBySport, entrants, onEdit, lastEdit }) {
+
+function NameField({ value, onCommit, placeholder, listId, clearAfter }) {
+  const [draft, setDraft] = useState(value);
+  const [prev, setPrev] = useState(value);
+  if (value !== prev) {
+    setPrev(value);
+    setDraft(value);
+  }
+  const commit = () => {
+    const next = draft.trim();
+    if (!next || next === value) {
+      setDraft(value);
+      return;
+    }
+    onCommit(next);
+    if (clearAfter) setDraft('');
+  };
+  return (
+    <input
+      className="group-name-input"
+      value={draft}
+      placeholder={placeholder}
+      list={listId}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Escape') {
+          setDraft(value);
+          e.currentTarget.blur();
+        }
+      }}
+    />
+  );
+}
+
+export default function GroupsOverview({ groupsBySport, entrants, onChange, lastEdit }) {
   const byId = useMemo(() => new Map(entrants.map((e) => [e.id, e])), [entrants]);
   const sports = Object.entries(groupsBySport || {});
   if (!sports.length) return null;
-
-  const apply = (sport, { groups, unassigned }, action) => {
-    const next = groups.map((g) => ({ ...g, memberIds: [...g.memberIds] }));
-    let pool = [...unassigned];
-    const { type, id, target } = action;
-    const fromIdx = next.findIndex((g) => g.memberIds.includes(id));
-    if (type === 'move' || type === 'add') {
-      if (fromIdx !== -1) next[fromIdx].memberIds = next[fromIdx].memberIds.filter((x) => x !== id);
-      pool = pool.filter((x) => x !== id);
-      next.find((g) => g.label === target).memberIds.push(id);
-    } else if (type === 'swap') {
-      const toIdx = next.findIndex((g) => g.memberIds.includes(target));
-      if (fromIdx === -1 || toIdx === -1) return;
-      next[fromIdx].memberIds = next[fromIdx].memberIds.map((x) => (x === id ? target : x));
-      next[toIdx].memberIds = next[toIdx].memberIds.map((x) => (x === target ? id : x));
-    } else if (type === 'remove') {
-      if (fromIdx !== -1) next[fromIdx].memberIds = next[fromIdx].memberIds.filter((x) => x !== id);
-      pool.push(id);
-    }
-    onEdit(sport, next, pool);
-  };
-
-  const onSelect = (sport, data, id) => (e) => {
-    const v = e.target.value;
-    e.target.value = '';
-    if (!v) return;
-    const [type, target] = v.split('::');
-    apply(sport, data, { type, id, target });
-  };
 
   return (
     <section className="card groups-card">
       <div className="groups-head">
         <h2 className="section-title groups-title">Groups</h2>
         <span className="field-hint groups-hint">
-          Move, swap or remove a team and its fixtures update automatically.
+          Rename, add or remove teams. Their fixtures update automatically.
         </span>
       </div>
       {lastEdit && <p className="groups-last-edit">{lastEdit}</p>}
       <div className="groups-sport-list">
-        {sports.map(([sport, data]) => (
-          <div className="groups-sport-block" key={sport}>
-            <h3 className="groups-sport-name">{sport}</h3>
-            <div className="groups-grid">
-              {data.groups.map((g) => (
-                <div className="group-tile" key={g.label}>
-                  <div className="group-tile-head">
-                    <span>Group {g.label}</span>
-                    <span className="group-tile-count">{g.memberIds.length}</span>
-                  </div>
-                  <ul className="group-member-list">
-                    {g.memberIds.map((id) => {
-                      const e = byId.get(id);
-                      if (!e) return null;
-                      return (
-                        <li key={id}>
-                          <span className="group-member-text">
-                            <span className="group-member-name">{e.name}</span>
-                            <span className="group-member-delegation">{e.delegation}</span>
-                          </span>
-                          <select
-                            className="group-member-action"
-                            defaultValue=""
-                            aria-label={`Change group for ${e.name}`}
-                            onChange={onSelect(sport, data, id)}
-                          >
-                            <option value="">Change…</option>
-                            <optgroup label="Move to">
-                              {data.groups
-                                .filter((o) => o.label !== g.label)
-                                .map((o) => (
-                                  <option key={o.label} value={`move::${o.label}`}>
-                                    Group {o.label}
-                                  </option>
-                                ))}
-                            </optgroup>
-                            <optgroup label="Swap with">
-                              {data.groups
-                                .filter((o) => o.label !== g.label)
-                                .flatMap((o) =>
-                                  o.memberIds.map((oid) => (
-                                    <option key={oid} value={`swap::${oid}`}>
-                                      {byId.get(oid)?.name} (Group {o.label})
-                                    </option>
-                                  ))
-                                )}
-                            </optgroup>
-                            <option value="remove::">Remove from groups</option>
-                          </select>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              ))}
-            </div>
-            {data.unassigned.length > 0 && (
-              <div className="group-unassigned">
-                <span className="group-unassigned-title">Not in a group</span>
-                <ul className="group-member-list">
-                  {data.unassigned.map((id) => {
-                    const e = byId.get(id);
-                    if (!e) return null;
-                    return (
-                      <li key={id}>
-                        <span className="group-member-text">
-                          <span className="group-member-name">{e.name}</span>
-                          <span className="group-member-delegation">{e.delegation}</span>
-                        </span>
-                        <select
-                          className="group-member-action"
-                          defaultValue=""
-                          aria-label={`Add ${e.name} to a group`}
-                          onChange={onSelect(sport, data, id)}
-                        >
-                          <option value="">Add to…</option>
-                          {data.groups.map((o) => (
-                            <option key={o.label} value={`add::${o.label}`}>
-                              Group {o.label}
-                            </option>
-                          ))}
-                        </select>
+        {sports.map(([sport, data]) => {
+          const listId = `teams-${sport.replace(/\W+/g, '-')}`;
+          return (
+            <div className="groups-sport-block" key={sport}>
+              <h3 className="groups-sport-name">{sport}</h3>
+              <datalist id={listId}>
+                {entrants
+                  .filter((e) => e.sport === sport)
+                  .map((e) => (
+                    <option key={e.id} value={e.name} />
+                  ))}
+              </datalist>
+              <div className="groups-grid">
+                {data.groups.map((g) => (
+                  <div className="group-tile" key={g.label}>
+                    <div className="group-tile-head">
+                      <span>Group {g.label}</span>
+                      <span className="group-tile-count">{g.memberIds.length}</span>
+                    </div>
+                    <ul className="group-member-list">
+                      {g.memberIds.map((id) => {
+                        const e = byId.get(id);
+                        if (!e) return null;
+                        return (
+                          <li key={id} className="group-member-row">
+                            <NameField
+                              value={e.name}
+                              listId={listId}
+                              onCommit={(name) => onChange(sport, { type: 'rename', id, name })}
+                            />
+                            <button
+                              type="button"
+                              className="group-remove"
+                              title={`Remove ${e.name} and its fixtures`}
+                              aria-label={`Remove ${e.name}`}
+                              onClick={() => onChange(sport, { type: 'remove', id })}
+                            >
+                              ×
+                            </button>
+                          </li>
+                        );
+                      })}
+                      <li className="group-member-row group-add-row">
+                        <NameField
+                          value=""
+                          placeholder="+ Add team"
+                          listId={listId}
+                          clearAfter
+                          onCommit={(name) => onChange(sport, { type: 'add', label: g.label, name })}
+                        />
                       </li>
-                    );
-                  })}
-                </ul>
+                    </ul>
+                  </div>
+                ))}
               </div>
-            )}
-          </div>
-        ))}
+            </div>
+          );
+        })}
       </div>
     </section>
   );
