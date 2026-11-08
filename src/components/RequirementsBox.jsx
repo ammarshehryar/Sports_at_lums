@@ -58,7 +58,7 @@ export default function RequirementsBox({ rules, onRulesChange, entrants, venueR
     setBusy(true);
     try {
       const history = log.filter((l) => l.role !== 'error').slice(-6);
-      const { reply, add, remove } = await askRequirementsAI({ message, history, context, rules });
+      const { reply, add, remove, source, aiProblem } = await askRequirementsAI({ message, history, context, rules });
       const stamp = Date.now().toString(36);
       const removeSet = new Set(remove);
       const next = [
@@ -67,7 +67,12 @@ export default function RequirementsBox({ rules, onRulesChange, entrants, venueR
       ];
       const changed = add.length || remove.length;
       const res = changed ? onRulesChange(next) : null;
-      push({ role: 'ai', text: `${reply || 'Done.'}${changed ? describeMoves(res) : ''}` });
+      push({
+        role: 'ai',
+        source,
+        problem: aiProblem,
+        text: `${reply || 'Done.'}${changed ? describeMoves(res) : ''}`,
+      });
     } catch (err) {
       push({ role: 'error', text: err.message });
     } finally {
@@ -106,7 +111,13 @@ export default function RequirementsBox({ rules, onRulesChange, entrants, venueR
         <div className="req-log" ref={logRef}>
           {log.map((l, i) => (
             <p key={i} className={`req-msg req-msg-${l.role}`}>
+              {l.source && (
+                <span className={`req-source req-source-${l.source}`} title={l.problem ? `AI not used: ${l.problem}` : undefined}>
+                  {l.source === 'ai' ? 'AI' : 'Built-in'}
+                </span>
+              )}
               {l.text}
+              {l.problem && <span className="req-problem">AI not used: {l.problem}.</span>}
             </p>
           ))}
           {busy && <p className="req-msg req-msg-ai req-thinking">Thinking…</p>}

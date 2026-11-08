@@ -1980,3 +1980,32 @@
   padding: 4px 6px;
   font-size: 12px;
 }
+
+.req-source {
+  display: inline-block;
+  margin-right: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 999px;
+  padding: 0 6px;
+  vertical-align: 1px;
+}
+
+.req-source-ai {
+  color: var(--success);
+  border: 1px solid rgba(58, 167, 109, 0.5);
+}
+
+.req-source-built-in {
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+}
+
+.req-problem {
+  display: block;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--gold-bright);
+}

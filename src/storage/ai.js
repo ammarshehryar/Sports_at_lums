@@ -16,7 +16,8 @@ export const aiAvailable = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 let aiOff = !aiAvailable;
 
 export async function askRequirementsAI({ message, history, context, rules }) {
-  const builtIn = () => parseRequirement(message, context, rules);
+  let aiProblem = '';
+  const builtIn = () => ({ ...parseRequirement(message, context, rules), source: 'built-in', aiProblem });
   if (aiOff) return builtIn();
   let res;
   try {
@@ -31,14 +32,24 @@ export async function askRequirementsAI({ message, history, context, rules }) {
     });
   } catch {
     aiOff = true;
+    aiProblem = 'the AI server could not be reached';
     return builtIn();
   }
   // Not deployed (404) or no key added (503): use the free built-in assistant.
+  const data = await res.json().catch(() => ({}));
   if (res.status === 404 || res.status === 503 || res.status === 401) {
     aiOff = true;
+    aiProblem =
+      res.status === 404
+        ? 'the fixture-ai function is not deployed'
+        : res.status === 503
+          ? 'no AI key is saved in Supabase secrets'
+          : 'the AI server refused the request';
     return builtIn();
   }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) return builtIn();
-  return { reply: data.reply || '', add: data.add || [], remove: data.remove || [] };
+  if (!res.ok) {
+    aiProblem = data.error || `AI error ${res.status}`;
+    return builtIn();
+  }
+  return { reply: data.reply || '', add: data.add || [], remove: data.remove || [], source: 'ai' };
 }
