@@ -18,13 +18,25 @@
 //     sense are deleted; new pairings take over the freed slots where the
 //     teams are free, and otherwise get booked into open venue time.
 //
-//  3. Save/restore. Matches share entrant objects by reference (manual
+//  3. Results everywhere. Winners can be recorded on every match, group
+//     games included. A group's winner (most wins, then head to head, then
+//     a manual pick if still tied) fills its "Winner of Group X" knockout
+//     slot, and the knockout then runs round by round to the final.
+//
+//  4. Mirror swaps. Typing another team's name into a first-round fixture
+//     swaps the two positions (walkovers included), and time slots follow.
+//
+//  5. Requirements (constraints.js). Every booking respects them, and
+//     enforceRules() moves any fixture that breaks one.
+//
+//  6. Save/restore. Matches share entrant objects by reference (manual
 //     edits rely on that, see manualEdit.js), so the saved form stores
 //     roster entrants as {ref: id} and relinks them on load.
 
 import { buildSessions, scheduleRounds, tournamentStart, subtractInterval } from './core/venueAllocator.js';
 import { buildAllMatches } from './matchGenerator.js';
 import { generateRoundRobin } from './core/roundRobinRotation.js';
+import { makeAccept, closedWindows, findViolations } from './constraints.js';
 
 // ---------- ids ----------
 
@@ -67,8 +79,15 @@ function allMatches(matchesBySport) {
  * around, so it is always right after deletions, manual moves, venue edits,
  * or reopening a saved fixture.
  */
-export function rebuildSessions(flatVenueRows, scheduled, bufferMinutes = 0) {
+export function rebuildSessions(flatVenueRows, scheduled, bufferMinutes = 0, rules = []) {
   const sessions = buildSessions(flatVenueRows);
+  for (const w of closedWindows(rules, flatVenueRows)) {
+    for (const s of sessions) {
+      if (s.day === w.day && s.venueName.trim().toLowerCase() === String(w.venueName).trim().toLowerCase()) {
+        s.free = subtractInterval(s.free, w.startAbs, w.endAbs);
+      }
+    }
+  }
   for (const slot of scheduled.values()) {
     for (const s of sessions) {
       if (s.venueName !== slot.venueName || s.day !== slot.day) continue;
@@ -89,8 +108,9 @@ function roundEnd(round, scheduled, fallback) {
 }
 
 function bookRound(state, sport, round, floor, ctx) {
-  const sessions = rebuildSessions(ctx.flatVenueRows, state.scheduled, ctx.settings.bufferMinutes);
-  const { scheduled, unscheduled } = scheduleRounds(sessions, sport, [round], ctx.settings, floor);
+  const sessions = rebuildSessions(ctx.flatVenueRows, state.scheduled, ctx.settings.bufferMinutes, ctx.rules);
+  const settings = { ...ctx.settings, accept: makeAccept(state, ctx.rules) };
+  const { scheduled, unscheduled } = scheduleRounds(sessions, sport, [round], settings, floor);
   for (const [id, v] of scheduled) state.scheduled.set(id, v);
   for (const id of unscheduled) if (!state.unscheduled.includes(id)) state.unscheduled.push(id);
 }
@@ -103,18 +123,87 @@ function unbook(state, id) {
 
 // ---------- results and projected rounds ----------
 
+const isGroupSrc = (src) => typeof src === 'string' && src.startsWith('group:');
+
 export function matchWinner(m) {
   if (!m) return null;
-  if (m.isWalkover) return m.entrantA;
+  const a = m.entrantA;
+  const b = m.entrantB;
+  if (m.isWalkover || a?.isWalkin || b?.isWalkin) {
+    const real = a?.isWalkin ? b : a;
+    return real && !real.isWalkin && !real.isPlaceholder ? real : null;
+  }
   if (!m.winnerId || m.winnerId === 'draw') return null;
-  if (m.entrantA?.isPlaceholder || m.entrantB?.isPlaceholder) return null;
-  if (m.winnerId === m.entrantA.id) return m.entrantA;
-  if (m.winnerId === m.entrantB.id) return m.entrantB;
+  if (a?.isPlaceholder || b?.isPlaceholder) return null;
+  if (m.winnerId === a.id) return a;
+  if (m.winnerId === b.id) return b;
   return null;
 }
 
-function placeholderFor(sourceMatchId) {
-  return { id: `TBD:${sourceMatchId}`, name: `Winner of ${sourceMatchId}`, delegation: '', isPlaceholder: true, sourceMatchId };
+/**
+ * Standings for one group: wins per team from recorded results. The winner
+ * is known once every group match has a result: most wins, then wins in
+ * matches among the tied teams, then a manual pick (groupsBySport[sport]
+ * .winners[label]) if it is still level.
+ */
+export function groupStandings(state, sport, label) {
+  const info = state.groupsBySport?.[sport];
+  const group = info?.groups?.find((g) => g.label === label);
+  if (!group) return { rows: [], complete: false, winner: null, tied: [] };
+  const rounds = state.matchesBySport[sport] || [];
+  const matches = rounds.flat().filter((m) => m.group === label);
+  const wins = new Map(group.memberIds.map((id) => [id, 0]));
+  const played = new Map(group.memberIds.map((id) => [id, 0]));
+  let complete = true;
+  for (const m of matches) {
+    const w = matchWinner(m);
+    if (!w) {
+      complete = false;
+      continue;
+    }
+    for (const e of [m.entrantA, m.entrantB]) if (played.has(e.id)) played.set(e.id, played.get(e.id) + 1);
+    if (wins.has(w.id)) wins.set(w.id, wins.get(w.id) + 1);
+  }
+  const rows = group.memberIds.map((id) => ({ id, wins: wins.get(id), played: played.get(id) }));
+  if (!group.memberIds.length) return { rows, complete: false, winner: null, tied: [] };
+  if (group.memberIds.length === 1) return { rows, complete: true, winner: group.memberIds[0], tied: [] };
+  if (!complete) return { rows, complete, winner: null, tied: [] };
+
+  const max = Math.max(...rows.map((r) => r.wins));
+  let tied = rows.filter((r) => r.wins === max).map((r) => r.id);
+  if (tied.length > 1) {
+    const h2h = new Map(tied.map((id) => [id, 0]));
+    for (const m of matches) {
+      if (!h2h.has(m.entrantA.id) || !h2h.has(m.entrantB.id)) continue;
+      const w = matchWinner(m);
+      if (w) h2h.set(w.id, h2h.get(w.id) + 1);
+    }
+    const best = Math.max(...h2h.values());
+    tied = tied.filter((id) => h2h.get(id) === best);
+  }
+  if (tied.length === 1) return { rows, complete, winner: tied[0], tied: [] };
+  const pick = info.winners?.[label];
+  return { rows, complete, winner: tied.includes(pick) ? pick : null, tied };
+}
+
+function resolveSource(state, sport, src, entrantsById) {
+  if (isGroupSrc(src)) {
+    const { winner } = groupStandings(state, sport, src.slice(6));
+    return winner ? entrantsById.get(winner) || null : null;
+  }
+  return matchWinner(findMatch(state.matchesBySport, src));
+}
+
+function placeholderFor(src) {
+  if (isGroupSrc(src)) {
+    const label = src.slice(6);
+    return { id: `TBD:${src}`, name: `Winner of Group ${label}`, delegation: '', isPlaceholder: true, sourceGroup: label };
+  }
+  return { id: `TBD:${src}`, name: `Winner of ${src}`, delegation: '', isPlaceholder: true, sourceMatchId: src };
+}
+
+function walkinOpponent() {
+  return { id: 'WALKIN', name: 'Walkin match', delegation: '', isWalkin: true };
 }
 
 /** Projected match for every adjacent pair of matches in `round`. */
@@ -135,21 +224,30 @@ function projectRound(sport, round, nextId) {
   return out;
 }
 
+function entrantsIndex(state) {
+  const byId = new Map();
+  for (const rounds of Object.values(state.matchesBySport)) {
+    for (const r of rounds) for (const m of r) for (const e of [m.entrantA, m.entrantB]) if (e && !e.isPlaceholder) byId.set(e.id, e);
+  }
+  return byId;
+}
+
 /**
- * Fill every projected slot whose feeder match now has a winner (and put the
- * placeholder back if that result was cleared). If the entrant in a slot
- * changes, any winner recorded on the projected match itself is dropped,
- * since it would point at someone who is no longer in that match.
+ * Fill every projected slot whose feeder (a match, or a whole group) now has
+ * a winner, and put the placeholder back if that result was cleared. If the
+ * entrant in a slot changes, a winner recorded on the projected match
+ * itself is dropped, since it would point at someone no longer in it.
  */
-export function syncProjected(matchesBySport) {
-  for (const rounds of Object.values(matchesBySport)) {
+export function syncProjected(state) {
+  const byId = entrantsIndex(state);
+  for (const [sport, rounds] of Object.entries(state.matchesBySport)) {
     for (const round of rounds) {
       for (const m of round) {
         if (!m.sourceA && !m.sourceB) continue;
         for (const side of ['A', 'B']) {
           const src = m[`source${side}`];
           if (!src) continue;
-          const w = matchWinner(findMatch(matchesBySport, src));
+          const w = resolveSource(state, sport, src, byId);
           const next = w || placeholderFor(src);
           if (m[`entrant${side}`]?.id !== next.id) {
             m[`entrant${side}`] = next;
@@ -164,21 +262,54 @@ export function syncProjected(matchesBySport) {
   }
 }
 
-/** Ids of matches whose winner feeds a match that already has a result (their result is frozen). */
+/** Ids of matches whose result feeds a match that already has a result (their result is frozen). */
 export function lockedResultIds(matchesBySport) {
   const locked = new Set();
-  for (const m of allMatches(matchesBySport)) {
+  const all = allMatches(matchesBySport);
+  for (const m of all) {
     if (!m.winnerId) continue;
-    if (m.sourceA) locked.add(m.sourceA);
-    if (m.sourceB) locked.add(m.sourceB);
+    for (const src of [m.sourceA, m.sourceB]) {
+      if (!src) continue;
+      if (isGroupSrc(src)) {
+        const label = src.slice(6);
+        for (const g of all) if (g.sport === m.sport && g.group === label) locked.add(g.id);
+      } else locked.add(src);
+    }
   }
   return locked;
 }
 
+/** Earliest a match may start: after its feeders (or the whole group stage) finish. */
+function floorFor(state, m, ctx) {
+  const start = tournamentStart(buildSessions(ctx.flatVenueRows));
+  let floor = start;
+  const rounds = state.matchesBySport[m.sport] || [];
+  for (const src of [m.sourceA, m.sourceB]) {
+    if (!src) continue;
+    if (isGroupSrc(src)) {
+      floor = roundEnd(rounds.flat().filter((g) => g.group), state.scheduled, floor);
+    } else {
+      const f = findMatch(state.matchesBySport, src);
+      if (f) floor = roundEnd([f, ...feedersDeep(state, f)], state.scheduled, floor);
+    }
+  }
+  return floor;
+}
+
+function feedersDeep(state, m) {
+  const out = [];
+  for (const src of [m.sourceA, m.sourceB]) {
+    if (!src || isGroupSrc(src)) continue;
+    const f = findMatch(state.matchesBySport, src);
+    if (f) out.push(f, ...feedersDeep(state, f));
+  }
+  return out;
+}
+
 /**
- * For every knockout sport: once every match feeding the latest projected
- * round has a result, project and book the round after it. Loops so a run of
- * walkovers can cascade. Returns the ids created.
+ * Once every feeder of the latest knockout round has a winner, project and
+ * book the round after it. Loops so a run of walkovers can cascade. Works
+ * the same for a straight knockout and for the knockout after groups.
  */
 export function autoAdvance(state, ctx) {
   const created = [];
@@ -186,44 +317,51 @@ export function autoAdvance(state, ctx) {
   let progressed = true;
   while (progressed) {
     progressed = false;
+    syncProjected(state);
     for (const [sport, rounds] of Object.entries(state.matchesBySport)) {
       const last = rounds[rounds.length - 1];
       if (!last || last.length < 2) continue;
-      if (!last.every((m) => m.sourceA && m.sourceB)) continue; // only bracket rounds
-      const feeders = last.flatMap((m) => [m.sourceA, m.sourceB]).map((id) => findMatch(state.matchesBySport, id));
-      if (!feeders.every((f) => matchWinner(f))) continue;
+      if (!last.every((m) => m.sourceA || m.sourceB)) continue; // only knockout rounds
+      if (!last.every((m) => matchWinner(m) || (!m.entrantA.isPlaceholder && !m.entrantB.isPlaceholder))) continue;
       const next = projectRound(sport, last, nextId);
       if (!next.length) continue;
       rounds.push(next);
-      const floor = roundEnd(last, state.scheduled, tournamentStart(buildSessions(ctx.flatVenueRows)));
+      const floor = roundEnd(last, state.scheduled, floorFor(state, last[0], ctx));
       bookRound(state, sport, next, floor, ctx);
       created.push(...next.map((m) => m.id));
       progressed = true;
     }
   }
-  syncProjected(state.matchesBySport);
+  syncProjected(state);
   return created;
 }
 
 export function setResult(state, matchId, winnerId, ctx) {
   const m = findMatch(state.matchesBySport, matchId);
-  if (!m || m.isWalkover) return false;
+  if (!m || m.isWalkover || m.entrantA.isWalkin || m.entrantB.isWalkin) return false;
   if (m.entrantA.isPlaceholder || m.entrantB.isPlaceholder) return false;
   if (lockedResultIds(state.matchesBySport).has(matchId)) return false;
   m.winnerId = m.winnerId === winnerId ? null : winnerId;
-  syncProjected(state.matchesBySport);
+  syncProjected(state);
   autoAdvance(state, ctx);
   return true;
 }
 
+/** Manual pick for a group that is level after head to head. */
+export function setGroupWinner(state, sport, label, entrantId, ctx) {
+  const info = state.groupsBySport?.[sport];
+  if (!info) return;
+  info.winners = { ...(info.winners || {}), [label]: entrantId };
+  syncProjected(state);
+  autoAdvance(state, ctx);
+}
+
 /** Per sport: champion once the final has a result, and how many results are still open. */
-export function bracketStatus(matchesBySport) {
+export function bracketStatus(state) {
   const status = {};
-  for (const [sport, rounds] of Object.entries(matchesBySport)) {
+  for (const [sport, rounds] of Object.entries(state.matchesBySport)) {
     const last = rounds[rounds.length - 1] || [];
-    const isBracket = rounds.length > 0 && rounds.every((r, i) => i === 0 || r.every((m) => m.sourceA));
-    if (!isBracket) continue;
-    const isFinal = last.length === 1;
+    const isFinal = last.length === 1 && !last[0].group;
     const champion = isFinal ? matchWinner(last[0]) : null;
     const open = rounds.flat().filter((m) => !m.isWalkover && !matchWinner(m)).length;
     status[sport] = { isFinal, champion, open };
@@ -231,9 +369,184 @@ export function bracketStatus(matchesBySport) {
   return status;
 }
 
+// ---------- mirror swaps (schedule table team cells) ----------
+
+const WALKIN_WORDS = /^(walk ?in( match)?|walkover|bye|w\/o)$/i;
+const normName = (x) => String(x ?? '').trim().toLowerCase();
+
+function syncWalkover(m) {
+  m.isWalkover = !!(m.entrantA?.isWalkin || m.entrantB?.isWalkin);
+  const a = m.entrantA;
+  const b = m.entrantB;
+  m.clash = !m.isWalkover && a.delegation && a.delegation === b.delegation ? a.delegation : null;
+}
+
+/**
+ * Typing `name` into a team cell of a fixture.
+ *  - It's another team in this sport's draw: the two swap places (the
+ *    mirror replacement), walkovers included.
+ *  - It's "Walkin match"/"bye": swaps with a walkover slot, if there is one.
+ *  - It's a new name: renames this team, or, on a walk-in slot, adds a new
+ *    team there and turns the walkover into a real fixture.
+ * Group-stage fixtures are handled by the group editor instead (App.jsx).
+ * Returns { ok, message, newEntrant? }.
+ */
+export function replaceTeam(state, matchId, side, name, entrants, ctx) {
+  const m = findMatch(state.matchesBySport, matchId);
+  if (!m) return { ok: false, message: 'Match not found.' };
+  const key = `entrant${side}`;
+  const cur = m[key];
+  if (m[`source${side}`]) return { ok: false, message: 'This slot is filled by an earlier result, so it can only change there.' };
+  const locked = lockedResultIds(state.matchesBySport);
+  const wantWalkin = WALKIN_WORDS.test(name.trim());
+
+  // Every fixed (not result-fed) position in this sport.
+  const positions = [];
+  for (const round of state.matchesBySport[m.sport] || []) {
+    for (const x of round) {
+      if (x.group) continue;
+      for (const sd of ['A', 'B']) {
+        if (x[`source${sd}`]) continue;
+        positions.push({ match: x, side: sd, entrant: x[`entrant${sd}`] });
+      }
+    }
+  }
+  const target = positions.find((p) =>
+    p.match === m && p.side === side
+      ? false
+      : wantWalkin
+        ? p.entrant?.isWalkin
+        : !p.entrant?.isWalkin && !p.entrant?.isPlaceholder && normName(p.entrant?.name) === normName(name)
+  );
+
+  if (!target) {
+    if (wantWalkin) return { ok: false, message: 'There is no walkover slot in this draw to swap with.' };
+    // Another team of this sport that isn't in the draw: put it here.
+    const outside = entrants.find((e) => e.sport === m.sport && normName(e.name) === normName(name));
+    if (outside && outside.id !== cur.id) {
+      if (m.winnerId) return { ok: false, message: 'Clear this match\'s result first.' };
+      const wasWalk = m.isWalkover;
+      m[key] = outside;
+      syncWalkover(m);
+      if (wasWalk && !m.isWalkover) bookOne(state, m, ctx);
+      syncProjected(state);
+      autoAdvance(state, ctx);
+      return { ok: true, message: `${outside.name} replaced ${cur.isWalkin ? 'the walkover' : cur.name}.` };
+    }
+    if (cur.isWalkin) {
+      const newEntrant = {
+        id: `N${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+        name: name.trim(),
+        delegation: '',
+        sport: m.sport,
+      };
+      m[key] = newEntrant;
+      syncWalkover(m);
+      bookOne(state, m, ctx);
+      syncProjected(state);
+      autoAdvance(state, ctx);
+      return { ok: true, message: `Added ${newEntrant.name}; the walkover is now a real fixture.`, newEntrant };
+    }
+    cur.name = name.trim();
+    return { ok: true, message: `Renamed to ${cur.name}.` };
+  }
+
+  const other = target.match;
+  if (m.winnerId || other.winnerId || locked.has(m.id) || locked.has(other.id)) {
+    return { ok: false, message: 'One of these fixtures already has a result. Clear it first, then swap.' };
+  }
+  const tKey = `entrant${target.side}`;
+  const mine = m[key];
+  const theirs = other[tKey];
+  const wasWalk = new Map([[m, !!m.isWalkover], [other, !!other.isWalkover]]);
+  m[key] = theirs;
+  other[tKey] = mine;
+  for (const x of [m, other]) {
+    if (x.entrantA.isWalkin && x.entrantB.isWalkin) {
+      // Would leave a walkover against a walkover: undo.
+      m[key] = mine;
+      other[tKey] = theirs;
+      return { ok: false, message: 'That swap would leave a fixture with no teams.' };
+    }
+    syncWalkover(x);
+  }
+
+  // Slots follow: a fixture that became a walkover frees its slot, and a
+  // walkover that became real takes that slot (or the next free one).
+  const freed = [];
+  for (const x of [m, other]) {
+    if (!wasWalk.get(x) && x.isWalkover) {
+      const slot = state.scheduled.get(x.id);
+      if (slot) freed.push(slot);
+      unbook(state, x.id);
+    }
+  }
+  for (const x of [m, other]) {
+    if (wasWalk.get(x) && !x.isWalkover) {
+      if (freed.length) state.scheduled.set(x.id, freed.shift());
+      else bookOne(state, x, ctx);
+    }
+  }
+  syncProjected(state);
+  autoAdvance(state, ctx);
+  const label = (e) => (e.isWalkin ? 'the walkover' : e.name);
+  return { ok: true, message: `Swapped ${label(mine)} and ${label(theirs)}.` };
+}
+
+function bookOne(state, m, ctx) {
+  unbook(state, m.id);
+  bookRound(state, m.sport, [m], floorFor(state, m, ctx), ctx);
+}
+
+// ---------- requirements ----------
+
+/**
+ * Move every fixture that breaks a requirement (or now starts before the
+ * matches feeding it have finished) to the earliest slot where everything
+ * holds. Returns { moved: [{id, from, to}], failed: [id] }.
+ */
+export function enforceRules(state, ctx) {
+  const moved = [];
+  const failed = [];
+  // A rule removed later shouldn't leave fixtures stranded: retry the unscheduled ones.
+  for (const id of [...state.unscheduled]) {
+    const m = findMatch(state.matchesBySport, id);
+    if (m && !m.isWalkover) {
+      bookOne(state, m, ctx);
+      if (state.scheduled.has(id)) moved.push({ id, from: null, to: state.scheduled.get(id) });
+    }
+  }
+  for (let pass = 0; pass < 4; pass++) {
+    const bad = findViolations(state, ctx.rules || []);
+    for (const rounds of Object.values(state.matchesBySport)) {
+      for (const round of rounds) {
+        for (const m of round) {
+          const slot = state.scheduled.get(m.id);
+          if (slot && (m.sourceA || m.sourceB) && slot.startAbs < floorFor(state, m, ctx)) bad.add(m.id);
+        }
+      }
+    }
+    if (!bad.size) break;
+    const ordered = [...bad]
+      .map((id) => ({ id, m: findMatch(state.matchesBySport, id), from: state.scheduled.get(id) }))
+      .filter((x) => x.m)
+      .sort((a, b) => (a.from?.startAbs ?? 0) - (b.from?.startAbs ?? 0));
+    for (const { id, m, from } of ordered) {
+      bookOne(state, m, ctx);
+      const to = state.scheduled.get(id);
+      if (to) moved.push({ id, from, to });
+      else if (!failed.includes(id)) failed.push(id);
+    }
+  }
+  // Report each fixture once, with where it started and where it ended up.
+  const byId = new Map();
+  for (const x of moved) byId.set(x.id, { id: x.id, from: byId.get(x.id)?.from ?? x.from, to: x.to });
+  return { moved: [...byId.values()].filter((x) => state.scheduled.get(x.id)), failed: failed.filter((id) => !state.scheduled.has(id)) };
+}
+
 // ---------- generation ----------
 
-export function generateTournament({ entrants, stageFormat, formatOptions, flatVenueRows, settings }) {
+export function generateTournament({ entrants, stageFormat, formatOptions, flatVenueRows, settings, rules = [] }) {
   const formatName = stageFormat === 'groupStage' ? 'groupStageKnockout' : 'singleRoundDraw';
   const { order, matchesBySport, metaBySport } = buildAllMatches(entrants, formatName, formatOptions);
 
@@ -255,30 +568,64 @@ export function generateTournament({ entrants, stageFormat, formatOptions, flatV
       matchesBySport[sport][0] = r1;
       if (r1.length >= 2) matchesBySport[sport].push(projectRound(sport, r1, nextId));
     }
-    syncProjected(matchesBySport);
   }
 
   const groupsBySport = {};
   for (const sport of order) {
     if (metaBySport[sport]?.groups) {
-      groupsBySport[sport] = { groups: metaBySport[sport].groups, unassigned: [] };
+      groupsBySport[sport] = { groups: metaBySport[sport].groups, unassigned: [], winners: {} };
     }
   }
 
-  const sessions = buildSessions(flatVenueRows);
-  const start = tournamentStart(sessions);
+  // Group stage: knockout fed by group winners ("Winner of Group A"),
+  // padded to a full bracket with walkovers so it always reaches a final.
+  if (formatName === 'groupStageKnockout') {
+    const nextId = makeIdFactory(matchesBySport);
+    for (const sport of order) {
+      const groupRounds = matchesBySport[sport].filter((r) => !r.some((m) => m.stage === 'knockout'));
+      const labels = (groupsBySport[sport]?.groups || []).filter((g) => g.memberIds.length).map((g) => g.label);
+      matchesBySport[sport] = groupRounds;
+      if (labels.length < 2) continue;
+      let size = 1;
+      while (size < labels.length) size *= 2;
+      const walkovers = size - labels.length;
+      const realPairs = size / 2 - walkovers;
+      const real = [];
+      const walk = [];
+      for (let i = 0; i < realPairs; i++) {
+        const [x, y] = [labels[2 * i], labels[2 * i + 1]];
+        real.push({ id: nextId(), sport, entrantA: placeholderFor(`group:${x}`), entrantB: placeholderFor(`group:${y}`), sourceA: `group:${x}`, sourceB: `group:${y}`, clash: null, isProjected: true });
+      }
+      for (const x of labels.slice(2 * realPairs)) {
+        walk.push({ id: nextId(), sport, entrantA: placeholderFor(`group:${x}`), entrantB: walkinOpponent(), sourceA: `group:${x}`, clash: null, isProjected: true, isWalkover: true });
+      }
+      const ko = [];
+      while (real.length || walk.length) {
+        if (real.length) ko.push(real.shift());
+        if (walk.length) ko.push(walk.shift());
+      }
+      matchesBySport[sport].push(ko);
+    }
+  }
+
+  const sessions = rebuildSessions(flatVenueRows, new Map(), settings.bufferMinutes, rules);
+  const start = tournamentStart(buildSessions(flatVenueRows));
   const scheduled = new Map();
   const unscheduled = [];
+  const draft = { matchesBySport, scheduled, groupsBySport };
   for (const sport of order) {
-    const res = scheduleRounds(sessions, sport, matchesBySport[sport], settings, start);
+    const res = scheduleRounds(sessions, sport, matchesBySport[sport], { ...settings, accept: makeAccept(draft, rules) }, start);
     for (const [id, v] of res.scheduled) scheduled.set(id, v);
     unscheduled.push(...res.unscheduled);
   }
 
   const genId = `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const state = { genId, matchesBySport, scheduled, unscheduled, groupsBySport };
+  const ctx = { flatVenueRows, settings, rules };
+  syncProjected(state);
   // A first round that is all walkovers (tiny pools) resolves itself.
-  autoAdvance(state, { flatVenueRows, settings });
+  autoAdvance(state, ctx);
+  if (rules.length) enforceRules(state, ctx);
   return state;
 }
 
@@ -357,7 +704,7 @@ export function applyGroupEdit(state, sport, groups, unassigned, entrants, ctx) 
   freedSlots.sort((a, b) => a.startAbs - b.startAbs);
 
   state.matchesBySport[sport] = [...newRounds.filter((r) => r && r.length), ...koRounds];
-  state.groupsBySport[sport] = { groups, unassigned };
+  state.groupsBySport[sport] = { ...(state.groupsBySport[sport] || {}), groups, unassigned };
 
   // New pairings take a freed slot first (a swap keeps the same times and
   // venues), as long as neither team is already playing then.
@@ -391,6 +738,8 @@ export function applyGroupEdit(state, sport, groups, unassigned, entrants, ctx) 
     }
   }
 
+  syncProjected(state);
+  autoAdvance(state, ctx);
   return { kept, removed: existing.size, added: added.length };
 }
 
@@ -429,12 +778,13 @@ export function deserializeTournament(saved, entrants) {
       round.map((m) => ({ ...m, entrantA: unpack(m.entrantA), entrantB: unpack(m.entrantB) }))
     );
   }
-  syncProjected(matchesBySport);
-  return {
+  const state = {
     genId: saved.genId || null,
     matchesBySport,
     scheduled: new Map(saved.scheduled || []),
     unscheduled: saved.unscheduled || [],
     groupsBySport: saved.groupsBySport || {},
   };
+  syncProjected(state);
+  return state;
 }

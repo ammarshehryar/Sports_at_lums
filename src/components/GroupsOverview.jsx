@@ -45,7 +45,7 @@ function NameField({ value, onCommit, placeholder, listId, clearAfter }) {
   );
 }
 
-export default function GroupsOverview({ groupsBySport, entrants, onChange, lastEdit }) {
+export default function GroupsOverview({ groupsBySport, entrants, onChange, lastEdit, standings, onPickWinner }) {
   const byId = useMemo(() => new Map(entrants.map((e) => [e.id, e])), [entrants]);
   const sports = Object.entries(groupsBySport || {});
   if (!sports.length) return null;
@@ -73,12 +73,31 @@ export default function GroupsOverview({ groupsBySport, entrants, onChange, last
                   ))}
               </datalist>
               <div className="groups-grid">
-                {data.groups.map((g) => (
+                {data.groups.map((g) => {
+                  const st = standings ? standings(sport, g.label) : { rows: [], tied: [] };
+                  const winsOf = new Map(st.rows.map((r) => [r.id, r.wins]));
+                  return (
                   <div className="group-tile" key={g.label}>
                     <div className="group-tile-head">
                       <span>Group {g.label}</span>
                       <span className="group-tile-count">{g.memberIds.length}</span>
                     </div>
+                    {st.complete && st.winner && g.memberIds.length > 1 && (
+                      <p className="group-winner-line">Winner: {byId.get(st.winner)?.name}</p>
+                    )}
+                    {st.complete && !st.winner && st.tied.length > 1 && (
+                      <label className="group-tie">
+                        <span>Tied on wins and head to head. Pick the winner:</span>
+                        <select defaultValue="" onChange={(e) => e.target.value && onPickWinner?.(sport, g.label, e.target.value)}>
+                          <option value="">Choose…</option>
+                          {st.tied.map((id) => (
+                            <option key={id} value={id}>
+                              {byId.get(id)?.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
                     <ul className="group-member-list">
                       {g.memberIds.map((id) => {
                         const e = byId.get(id);
@@ -90,6 +109,9 @@ export default function GroupsOverview({ groupsBySport, entrants, onChange, last
                               listId={listId}
                               onCommit={(name) => onChange(sport, { type: 'rename', id, name })}
                             />
+                            <span className="group-wins" title="Wins so far">
+                              {winsOf.get(id) ?? 0}W
+                            </span>
                             <button
                               type="button"
                               className="group-remove"
@@ -113,7 +135,8 @@ export default function GroupsOverview({ groupsBySport, entrants, onChange, last
                       </li>
                     </ul>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           );

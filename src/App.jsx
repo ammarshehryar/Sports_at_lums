@@ -18,12 +18,17 @@ import {
   setResult,
   applyGroupEdit,
   bracketStatus,
+  replaceTeam,
+  enforceRules,
+  groupStandings,
+  setGroupWinner,
   serializeTournament,
   deserializeTournament,
   autoAdvance,
 } from './engine/tournament.js';
 import { loadFixture, saveFixture, getFixtureRev } from './storage/fixtureStore.js';
 import { mergeStates } from './storage/merge.js';
+import RequirementsBox from './components/RequirementsBox.jsx';
 import './styles/app.css';
 
 const SAVE_DELAY_MS = 800;
@@ -61,13 +66,16 @@ export default function App() {
   const [genSummary, setGenSummary] = useState(null);
   const [genError, setGenError] = useState('');
   const [groupEditNote, setGroupEditNote] = useState('');
+  // Scheduling requirements (from the AI box), saved with the fixture.
+  const [rules, setRules] = useState([]);
+  const [tableNote, setTableNote] = useState('');
 
   const touch = useCallback(() => setVersion((v) => v + 1), []);
 
   const flatVenueRows = useMemo(() => flattenVenues(venues), [venues]);
   const ctx = useMemo(
-    () => ({ flatVenueRows, settings: { durationMinutes: matchDuration, bufferMinutes: breakDuration } }),
-    [flatVenueRows, matchDuration, breakDuration]
+    () => ({ flatVenueRows, settings: { durationMinutes: matchDuration, bufferMinutes: breakDuration }, rules }),
+    [flatVenueRows, matchDuration, breakDuration, rules]
   );
 
   // ---------- open / save / live sync ----------
@@ -95,11 +103,12 @@ export default function App() {
             numGroups,
             groupSize,
             genSummary,
+            rules,
             tournament: serializeTournament(genResult, entrants),
           }
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [loaded, fileName, entrants, venues, matchDuration, breakDuration, stageFormat, groupSizeMode, numGroups, groupSize, genSummary, genResult, version]
+    [loaded, fileName, entrants, venues, matchDuration, breakDuration, stageFormat, groupSizeMode, numGroups, groupSize, genSummary, rules, genResult, version]
   );
   const currentRef = useRef(null);
   currentRef.current = currentState;
@@ -120,6 +129,8 @@ export default function App() {
     setGenError('');
     setGroupEditNote('');
     setRemoteNote('');
+    setRules([]);
+    setTableNote('');
   };
 
   // Put a saved state on screen (on open, or when someone else's changes come in).
@@ -143,10 +154,12 @@ export default function App() {
         advanced = autoAdvance(t, {
           flatVenueRows: flattenVenues(s.venues || []),
           settings: { durationMinutes: s.matchDuration || 30, bufferMinutes: s.breakDuration ?? 10 },
+          rules: Array.isArray(s.rules) ? s.rules : [],
         }).length;
       }
       setGenResult(t);
       setGenSummary(s.genSummary || null);
+      setRules(Array.isArray(s.rules) ? s.rules : []);
       rebaseNext.current = advanced === 0;
       touch();
     },
@@ -311,13 +324,51 @@ export default function App() {
     setGenSummary(null);
   }, []);
 
+  const groupChangeRef = useRef(null);
   const handleUpdateRow = useCallback(
     (row, key, value) => {
       if (!genResult) return;
+      if ((key === 'teamA' || key === 'teamB') && String(value).trim()) {
+        const side = key === 'teamA' ? 'A' : 'B';
+        const id = side === 'A' ? row.entrantAId : row.entrantBId;
+        if (row.group) {
+          // Group fixture: same as editing the name in the Groups panel.
+          groupChangeRef.current?.(row.sport, { type: 'rename', id, name: String(value).trim() });
+          setTableNote('');
+          return;
+        }
+        const res = replaceTeam(genResult, row.matchId, side, String(value), entrants, ctx);
+        if (res.newEntrant) setEntrants((prev) => [...prev, res.newEntrant]);
+        setTableNote(res.message);
+        touch();
+        return;
+      }
       applyRowEdit(genResult, row, key, value, matchDuration);
       touch();
     },
-    [genResult, matchDuration, touch]
+    [genResult, matchDuration, touch, entrants, ctx]
+  );
+
+  const handlePickGroupWinner = useCallback(
+    (sport, label, id) => {
+      if (!genResult) return;
+      setGroupWinner(genResult, sport, label, id, ctx);
+      touch();
+    },
+    [genResult, ctx, touch]
+  );
+
+  // Requirements changed (AI box or a chip removed): store them and move any
+  // fixture that now breaks one.
+  const handleRulesChange = useCallback(
+    (nextRules) => {
+      setRules(nextRules);
+      if (!genResult) return { moved: [], failed: [] };
+      const res = enforceRules(genResult, { ...ctx, rules: nextRules });
+      touch();
+      return res;
+    },
+    [genResult, ctx, touch]
   );
 
   const handleSetResult = useCallback(
@@ -410,6 +461,8 @@ export default function App() {
     [genResult, entrants, ctx, touch]
   );
 
+  groupChangeRef.current = handleGroupChange;
+
   const handleGenerate = useCallback(() => {
     if (!canGenerate) {
       setGenError('Please upload a roster and add at least one venue with a valid day/time window first.');
@@ -425,7 +478,7 @@ export default function App() {
             ? { groupSize: Math.max(2, Number(groupSize) || 4) }
             : { numGroups: Math.max(2, Number(numGroups) || 4) }
           : {};
-      const result = generateTournament({ entrants, stageFormat, formatOptions, flatVenueRows, settings: ctx.settings });
+      const result = generateTournament({ entrants, stageFormat, formatOptions, flatVenueRows, settings: ctx.settings, rules });
       setGenResult(result);
       setGroupEditNote('');
       const sports = new Set(entrants.map((e) => e.sport));
@@ -434,7 +487,7 @@ export default function App() {
     } finally {
       setGenerating(false);
     }
-  }, [canGenerate, genResult, flatVenueRows, entrants, ctx, stageFormat, groupSizeMode, numGroups, groupSize]);
+  }, [canGenerate, genResult, flatVenueRows, entrants, ctx, rules, stageFormat, groupSizeMode, numGroups, groupSize]);
 
   const handleExportExcel = useCallback(
     (rows) => {
@@ -464,9 +517,10 @@ export default function App() {
 
   // ---------- bracket status ----------
 
-  const supportsBracket = stageFormat === 'knockout';
+  // Winners can be recorded on every match, group games included.
+  const supportsBracket = true;
   const status = useMemo(
-    () => (genResult && supportsBracket ? bracketStatus(genResult.matchesBySport) : {}),
+    () => (genResult && supportsBracket ? bracketStatus(genResult) : {}),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [genResult, supportsBracket, version]
   );
@@ -540,12 +594,24 @@ export default function App() {
               </p>
             </div>
           )}
+          {loaded && !hasSchedule && (
+            <RequirementsBox
+              rules={rules}
+              onRulesChange={handleRulesChange}
+              entrants={entrants}
+              venueRows={flatVenueRows}
+              fixtureName={fixture?.name}
+              hasSchedule={false}
+              rows={[]}
+            />
+          )}
 
           {supportsBracket && hasSchedule && openResults > 0 && (
             <div className="card bracket-progress-card">
               <div className="bracket-progress-info">
-                Record winners with the A / B buttons. Projected slots fill in by themselves, and the next round is
-                drawn and booked as soon as a round's results are in. {openResults} result
+                Record winners with the A / B buttons, group games included. Group winners and projected slots fill
+                in by themselves, and the next round is drawn and booked as soon as a round's results are in.{' '}
+                {openResults} result
                 {openResults === 1 ? '' : 's'} still to record.
               </div>
             </div>
@@ -559,6 +625,7 @@ export default function App() {
 
           {hasSchedule && (
             <>
+              {tableNote && <div className="banner banner-info">{tableNote}</div>}
               <ScheduleTable
                 rows={scheduleRows}
                 onExportExcel={handleExportExcel}
@@ -570,11 +637,22 @@ export default function App() {
                 onSetResult={handleSetResult}
                 supportsBracket={supportsBracket}
               />
+              <RequirementsBox
+                rules={rules}
+                onRulesChange={handleRulesChange}
+                entrants={entrants}
+                venueRows={flatVenueRows}
+                fixtureName={fixture?.name}
+                hasSchedule={hasSchedule}
+                rows={scheduleRows}
+              />
               <GroupsOverview
                 groupsBySport={genResult?.groupsBySport}
                 entrants={entrants}
                 onChange={handleGroupChange}
                 lastEdit={groupEditNote}
+                standings={(sport, label) => groupStandings(genResult, sport, label)}
+                onPickWinner={handlePickGroupWinner}
               />
               <AnalyticsDashboard
                 rows={scheduleRows}

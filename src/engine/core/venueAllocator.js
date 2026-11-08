@@ -101,13 +101,29 @@ function supportsSport(session, sportId) {
  * least-booked venue so far (even spread), then by venue name for
  * determinism.
  */
-function findBestSlot(sessions, sportId, duration, earliestPossibleAbs) {
+function findBestSlot(sessions, sportId, duration, earliestPossibleAbs, accept, match) {
+  // With an `accept(match, slot)` check (scheduling requirements), the
+  // earliest start in a free interval may be ruled out, so later starts in
+  // the same interval are tried in 5-minute steps.
+  const STEP = 5;
   let best = null;
   for (const session of sessions) {
     if (!supportsSport(session, sportId)) continue;
     for (const iv of session.free) {
-      const usableStart = Math.max(iv.start, earliestPossibleAbs);
-      if (usableStart + duration > iv.end) continue;
+      let usableStart = Math.max(iv.start, earliestPossibleAbs);
+      let found = false;
+      while (usableStart + duration <= iv.end) {
+        if (best && usableStart > best.usableStart) break;
+        if (
+          !accept ||
+          accept(match, { venueName: session.venueName, day: session.day, startAbs: usableStart, endAbs: usableStart + duration })
+        ) {
+          found = true;
+          break;
+        }
+        usableStart += STEP;
+      }
+      if (!found) continue;
       if (
         !best ||
         usableStart < best.usableStart ||
@@ -154,7 +170,7 @@ export function scheduleRounds(sessions, sportId, rounds, settings, earliestStar
     let maxEnd = earliest;
     const realMatches = round.filter((m) => !m.isWalkover && !m.isPending);
     for (const match of realMatches) {
-      const slot = findBestSlot(sessions, sportId, duration, earliest);
+      const slot = findBestSlot(sessions, sportId, duration, earliest, settings?.accept, match);
       if (!slot) {
         unscheduled.push(match.id);
         continue;

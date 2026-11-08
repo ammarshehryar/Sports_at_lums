@@ -179,7 +179,7 @@ export default function ScheduleTable({
   // cells - helps catch a near-duplicate spelling of a team that already
   // exists elsewhere in the schedule.
   const nameSuggestions = useMemo(
-    () => [...new Set(rows.flatMap((r) => [r.teamA, r.teamB]))].filter(Boolean).sort(),
+    () => [...new Set(rows.flatMap((r) => [r.placeholderA || r.walkinA ? '' : r.teamA, r.placeholderB || r.walkinB ? '' : r.teamB]))].filter(Boolean).sort(),
     [rows]
   );
   const delegationSuggestions = useMemo(
@@ -330,7 +330,8 @@ export default function ScheduleTable({
               // Once a winner is picked (or the match is a bye/already advanced),
               // the rest of the row freezes - only the result itself can still
               // change hands, and only up until it feeds into the next round.
-              const locked = Boolean(r.winnerId) || r.isWalkover || r.advanced;
+              // Walkovers stay editable: swap a team in or out of them by typing a name.
+              const locked = Boolean(r.winnerId) || r.advanced;
 
               // A thin labeled divider wherever the round changes, so "Round 1
               // ends, Round 2 starts" is visible at a glance. Only makes sense
@@ -370,6 +371,7 @@ export default function ScheduleTable({
                         value={r.teamA}
                         datalistId="schedule-name-options"
                         onCommit={edit('teamA')}
+                        title="Type another team's name to swap the two"
                         locked={locked || r.placeholderA}
                       />
                     </td>
@@ -378,7 +380,7 @@ export default function ScheduleTable({
                         value={r.delegationA}
                         datalistId="schedule-delegation-options"
                         onCommit={edit('delegationA')}
-                        locked={locked || r.placeholderA}
+                        locked={locked || r.placeholderA || r.walkinA}
                       />
                     </td>
                     <td>
@@ -386,6 +388,7 @@ export default function ScheduleTable({
                         value={r.teamB}
                         datalistId="schedule-name-options"
                         onCommit={edit('teamB')}
+                        title="Type another team's name to swap the two"
                         locked={locked || r.placeholderB}
                       />
                     </td>
@@ -394,14 +397,14 @@ export default function ScheduleTable({
                         value={r.delegationB}
                         datalistId="schedule-delegation-options"
                         onCommit={edit('delegationB')}
-                        locked={locked || r.placeholderB}
+                        locked={locked || r.placeholderB || r.walkinB}
                       />
                     </td>
                     <td title={conflicted ? 'Double-booked with another match — check venue/time.' : undefined}>
-                      <EditableCell value={r.venue} options={venueSelectOptions} onCommit={edit('venue')} locked={locked} />
+                      <EditableCell value={r.venue} options={venueSelectOptions} onCommit={edit('venue')} locked={locked || r.isWalkover} />
                     </td>
                     <td title={conflicted ? 'Double-booked with another match — check venue/time.' : undefined}>
-                      <EditableCell value={r.date} options={dateSelectOptions} onCommit={edit('date')} locked={locked} />
+                      <EditableCell value={r.date} options={dateSelectOptions} onCommit={edit('date')} locked={locked || r.isWalkover} />
                     </td>
                     <td title={conflicted ? 'Double-booked with another match — check venue/time.' : undefined}>
                       <EditableCell
@@ -409,7 +412,7 @@ export default function ScheduleTable({
                         type="time"
                         placeholder="—"
                         onCommit={edit('time')}
-                        locked={locked}
+                        locked={locked || r.isWalkover}
                       />
                       {r.startTime ? ` – ${r.endTime}` : ''}
                     </td>
