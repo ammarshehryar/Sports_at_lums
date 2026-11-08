@@ -7,7 +7,8 @@
 // Secrets (Supabase dashboard -> Edge Functions -> Secrets):
 //   ANTHROPIC_API_KEY  required (console.anthropic.com -> API keys)
 //   ANTHROPIC_MODEL    optional, defaults to claude-sonnet-5-5
-// Or, instead of Claude: GEMINI_API_KEY (+ optional GEMINI_MODEL).
+// Or, free: GEMINI_API_KEY from aistudio.google.com (+ optional GEMINI_MODEL).
+// If both keys are set, Claude is used.
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -105,22 +106,32 @@ async function askClaude(key: string, system: string, messages: { role: string; 
 }
 
 async function askGemini(key: string, system: string, messages: { role: string; content: string }[]) {
-  const model = Deno.env.get('GEMINI_MODEL') || 'gemini-2.5-flash';
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: {
-        parts: [{ text: `${system}\n\nRespond only with JSON matching this schema: ${JSON.stringify(TOOL.input_schema)}` }],
-      },
-      contents: messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
-      generationConfig: { responseMimeType: 'application/json' },
-    }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message || `Gemini API error ${res.status}`);
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-  return JSON.parse(text);
+  // Google renames models often; "gemini-flash-latest" always points at the
+  // current free Flash model. GEMINI_MODEL overrides it.
+  const models = [Deno.env.get('GEMINI_MODEL'), 'gemini-flash-latest', 'gemini-2.5-flash'].filter(Boolean) as string[];
+  let lastError = 'Gemini API error';
+  for (const model of models) {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: `${system}\n\nRespond only with JSON matching this schema: ${JSON.stringify(TOOL.input_schema)}` }],
+        },
+        contents: messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
+        generationConfig: { responseMimeType: 'application/json' },
+      }),
+    });
+    const data = await res.json();
+    if (res.status === 404) {
+      lastError = data?.error?.message || `Model ${model} not found`;
+      continue;
+    }
+    if (!res.ok) throw new Error(data?.error?.message || `Gemini API error ${res.status}`);
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    return JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ''));
+  }
+  throw new Error(lastError);
 }
 
 Deno.serve(async (req) => {
