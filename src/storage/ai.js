@@ -1,18 +1,23 @@
 // ai.js
-// Sends a requirement typed into the AI box to the `fixture-ai` Supabase
-// Edge Function (supabase/functions/fixture-ai), which asks Claude to turn
-// it into structured rules. The AI key lives only in Supabase, never in
-// this site's code.
+// Turns a requirement typed into the Requirements box into structured rules.
+// By default this is the free built-in assistant (engine/requirementParser.js).
+// If the optional `fixture-ai` Supabase Edge Function is ever deployed with
+// an AI key, it is used instead; the key lives only in Supabase.
 
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
+import { parseRequirement } from '../engine/requirementParser.js';
 
 export const aiAvailable = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 /**
  * @returns {Promise<{reply: string, add: object[], remove: string[]}>}
  */
+// Once the AI server function says it isn't set up, stop asking it this visit.
+let aiOff = !aiAvailable;
+
 export async function askRequirementsAI({ message, history, context, rules }) {
-  if (!aiAvailable) throw new Error('The AI box needs the shared database connected.');
+  const builtIn = () => parseRequirement(message, context, rules);
+  if (aiOff) return builtIn();
   let res;
   try {
     res = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/fixture-ai`, {
@@ -25,10 +30,15 @@ export async function askRequirementsAI({ message, history, context, rules }) {
       body: JSON.stringify({ message, history, context, rules }),
     });
   } catch {
-    throw new Error("Couldn't reach the AI. Check the internet connection and try again.");
+    aiOff = true;
+    return builtIn();
   }
-  if (res.status === 404) throw new Error('The AI box isn’t switched on yet (its server function hasn’t been deployed).');
+  // Not deployed (404) or no key added (503): use the free built-in assistant.
+  if (res.status === 404 || res.status === 503 || res.status === 401) {
+    aiOff = true;
+    return builtIn();
+  }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `The AI returned an error (${res.status}).`);
+  if (!res.ok) return builtIn();
   return { reply: data.reply || '', add: data.add || [], remove: data.remove || [] };
 }

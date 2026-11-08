@@ -85,7 +85,7 @@ export default function RequirementsBox({ rules, onRulesChange, entrants, venueR
       <div className="req-head">
         <h2 className="section-title">Requirements</h2>
         <span className="field-hint req-hint">
-          Type any scheduling requirement in plain words. The AI turns it into a rule and the fixtures adjust.
+          Type a scheduling requirement in plain words. It becomes a rule and the fixtures adjust.
         </span>
       </div>
 

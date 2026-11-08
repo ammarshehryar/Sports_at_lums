@@ -168,7 +168,9 @@ export function describeRule(r) {
       const [y, mo, d] = r.date.split('-').map(Number);
       parts.push(new Date(y, mo - 1, d).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }));
     } else parts.push('every day');
-    if (r.from || r.to) parts.push(`${r.from || 'start'} to ${r.to || 'close'}`);
+    if (r.from && r.to) parts.push(`${r.from} to ${r.to}`);
+    else if (r.from) parts.push(`after ${r.from}`);
+    else if (r.to) parts.push(`before ${r.to}`);
     else parts.push('all day');
     return parts.join(', ');
   };
@@ -176,7 +178,7 @@ export function describeRule(r) {
     case 'unavailable':
       return `${who}${sport} can't play ${when()}`;
     case 'onlyWindow':
-      return `${r.target ? who : r.sport || 'All matches'}${r.target ? sport : ''} only ${when()}`;
+      return `${r.target ? who : r.sport || 'All matches'}${r.target ? sport : ''} plays only ${when()}`;
     case 'venueClosed':
       return `${r.venue} closed ${when()}`;
     case 'venueForSport':
